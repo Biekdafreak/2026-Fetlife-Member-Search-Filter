@@ -8,16 +8,16 @@
 // @author       Biekdafreak
 // @match        https://fetlife.com/*
 // @match        https://www.fetlife.com/*
-// @updateURL    https://raw.githubusercontent.com/Biekdafreak/2026-Fetlife-Member-Filter-by-Biekdafreak/main/fetlife-member-filter.user.js
-// @downloadURL  https://raw.githubusercontent.com/Biekdafreak/2026-Fetlife-Member-Filter-by-Biekdafreak/main/fetlife-member-filter.user.js
+// @updateURL    https://raw.githubusercontent.com/Biekdafreak/2026-Fetlife-Member-Search-Filter/main/fetlife-member-filter.user.js
+// @downloadURL  https://raw.githubusercontent.com/Biekdafreak/2026-Fetlife-Member-Search-Filter/main/fetlife-member-filter.user.js
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=fetlife.com
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_addStyle
 // @run-at       document-start
 // @license      GPLv3
-// @homepageURL  https://github.com/Biekdafreak/2026-Fetlife-Member-Filter-by-Biekdafreak
-// @supportURL   https://github.com/Biekdafreak/2026-Fetlife-Member-Filter-by-Biekdafreak/issues
+// @homepageURL  https://github.com/Biekdafreak/2026-Fetlife-Member-Search-Filter
+// @supportURL   https://github.com/Biekdafreak/2026-Fetlife-Member-Search-Filter/issues
 // ==/UserScript==
 
 (function () {

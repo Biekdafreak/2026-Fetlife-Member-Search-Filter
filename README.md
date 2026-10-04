@@ -1,4 +1,4 @@
-# 2026 FetLife Member Filter
+# 2026 FetLife Member Search Filter
 
 A Tampermonkey userscript for FetLife member lists (group members, place members, search
 results). It hides the profiles you don't want before they appear on screen. You can filter
@@ -8,7 +8,7 @@ The original goal was clearing out fake profiles with a single photo. It now als
 several pages at once and filters across all of them, so you can work through thousands of
 members in minutes instead of paging through them by hand.
 
-**[Install the script](https://raw.githubusercontent.com/Biekdafreak/2026-Fetlife-Member-Filter-by-Biekdafreak/main/fetlife-member-filter.user.js)**
+**[Install the script](https://raw.githubusercontent.com/Biekdafreak/2026-Fetlife-Member-Search-Filter/main/fetlife-member-filter.user.js)**
 (you need Tampermonkey first; see below)
 
 ![The FilterLife panel with Options open, above a member list](screenshots/filter-panel.png)
@@ -55,7 +55,7 @@ Other tools:
 2. **Chrome / Edge only:** open `chrome://extensions`, click **Details** on Tampermonkey and
    turn on **Allow User Scripts**. On older Chrome versions, turn on **Developer mode** (top
    right) instead. Without this step, Tampermonkey won't run any scripts.
-3. Click **[Install the script](https://raw.githubusercontent.com/Biekdafreak/2026-Fetlife-Member-Filter-by-Biekdafreak/main/fetlife-member-filter.user.js)**,
+3. Click **[Install the script](https://raw.githubusercontent.com/Biekdafreak/2026-Fetlife-Member-Search-Filter/main/fetlife-member-filter.user.js)**,
    then click **Install** in the Tampermonkey tab that opens.
 4. Open any member list on FetLife. The **FilterLife** panel appears above the list.
 
@@ -112,7 +112,7 @@ each member's activity page and reads the newest timestamp on it. In practice:
 - **"Barely anyone is showing."** Read the status line. Usually the activity filter is on
   with "show unchecked" off, so everyone stays hidden until you click [check activity].
 - **Something broke after a FetLife update.** Please
-  [open an issue](https://github.com/Biekdafreak/2026-Fetlife-Member-Filter-by-Biekdafreak/issues)
+  [open an issue](https://github.com/Biekdafreak/2026-Fetlife-Member-Search-Filter/issues)
   and say which page it happened on.
 
 ## What this fork adds
