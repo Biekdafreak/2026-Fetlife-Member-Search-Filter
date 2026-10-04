@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         2026 Fetlife Member Filter
 // @namespace    http://tampermonkey.net/
-// @version      2.14
+// @version      2.15
 // @description  Filter FetLife member lists by gender, age, role, location, picture count and recent activity. Hides fake one-photo profiles, loads up to 10 pages at once, and filters cards before they render.
 // @author       Bull864
 // @author       genevera
@@ -101,7 +101,8 @@
       display: block;
     }
     .fili-numeric {
-      width: 40px;
+      width: 6ch;
+      min-width: 40px;
       background: #1a1a2e;
       border: 1px solid #4b5563;
       color: #d1d5db;

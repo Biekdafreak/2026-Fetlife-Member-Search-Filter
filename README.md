@@ -11,6 +11,11 @@ members in minutes instead of paging through them by hand.
 **[Install the script](https://raw.githubusercontent.com/Biekdafreak/2026-Fetlife-Member-Filter-by-Biekdafreak/main/fetlife-member-filter.user.js)**
 (you need Tampermonkey first; see below)
 
+![The FilterLife panel with Options open, above a member list](screenshots/filter-panel.png)
+
+*The full panel with Options open, shown on a demo list of made-up members. Minimum pictures
+is set to 2, so the two single-photo profiles are hidden, and the status line says so.*
+
 ---
 
 ## Features
@@ -127,6 +132,7 @@ pictures):
   per-click limit you can set.
 - **2.13–2.14**: Merged pages are filtered before they appear. Status line explains why
   members are hidden.
+- **2.15**: Number boxes are wide enough for four-digit values like the 1200 ms default.
 
 ## Credits and license
 
