@@ -40,6 +40,9 @@ Other tools:
 - **Card size %** enlarges member cards (100–250%) so photos are easier to see.
 - **A status line** explains why members are hidden, e.g.
   `(52 hidden: 40 by your filters · 9 inactive · 3 not checked yet)`.
+- **✕ on each card** hides that one member on every list, for good. Useful when a profile's
+  gender or age label doesn't match what's actually posted. Bring someone back with
+  [Temporarily show all] and "unhide" on their card, or clear the whole list from Options.
 - **[Temporarily show all]** reveals everything without changing your settings.
 - **No flicker.** Unwanted cards are hidden as they're inserted, including cards from merged
   pages, so they never show up even for a moment.
@@ -133,6 +136,7 @@ pictures):
 - **2.13–2.14**: Merged pages are filtered before they appear. Status line explains why
   members are hidden.
 - **2.15**: Number boxes are wide enough for four-digit values like the 1200 ms default.
+- **2.16**: A ✕ on every card hides that member for good, whatever their profile says.
 
 ## Credits and license
 

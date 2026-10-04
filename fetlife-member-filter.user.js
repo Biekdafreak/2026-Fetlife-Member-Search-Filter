@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         2026 Fetlife Member Filter
 // @namespace    http://tampermonkey.net/
-// @version      2.15
+// @version      2.16
 // @description  Filter FetLife member lists by gender, age, role, location, picture count and recent activity. Hides fake one-photo profiles, loads up to 10 pages at once, and filters cards before they render.
 // @author       Bull864
 // @author       genevera
@@ -310,6 +310,7 @@
   // lastHideReason; it defaults to "filters" for the non-activity checks.
   const HIDE_LABELS = {
     filters: "by your filters",
+    blocked: "hidden by you",
     inactive: "inactive",
     unchecked: "not checked yet",
     noactivity: "no activity found"
@@ -325,6 +326,7 @@
   function processCard(card) {
     if (card.dataset.filiProcessed === "true") return;
     card.dataset.filiProcessed = "true";
+    addBlockButton(card);
 
     lastHideReason = "filters";
     if (shouldHide(card)) {
@@ -1262,7 +1264,7 @@
       // instead meant that with "show unchecked" off, nobody ever got checked.
       if (originalShouldHide(card)) return;
       const path = profilePath(card);
-      if (!path) return;
+      if (!path || blockedMembers.has(path)) return;
       const hit = activityCache[path];
       if (hit && Date.now() - hit.checked < ttl) return;
       targets.add(path);
@@ -1341,6 +1343,159 @@
       return true;
     }
     return false;
+  };
+
+  // ─── Hide individual members ──────────────────────────────────────────────
+  //
+  // Filters judge the label, not the person: a profile can carry any gender
+  // or age and still be someone you never want to see. Every card gets a
+  // small ✕ that hides that member for good, on every list, until you unhide
+  // them. Kept by profile path, the same key the activity cache uses.
+
+  const BLOCKED_KEY = "FiLiBlocked";
+
+  const blockedMembers = (() => {
+    try {
+      const list = JSON.parse(GM_getValue(BLOCKED_KEY, "[]"));
+      return new Set(Array.isArray(list) ? list : []);
+    } catch (e) {
+      return new Set();
+    }
+  })();
+
+  function saveBlocked() {
+    GM_setValue(BLOCKED_KEY, JSON.stringify([...blockedMembers]));
+    updateBlockedCount();
+  }
+
+  function isBlocked(card) {
+    const path = profilePath(card);
+    return !!path && blockedMembers.has(path);
+  }
+
+  GM_addStyle(`
+    ${CARD_SELECTOR} { position: relative; }
+    .fili-block-btn {
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      z-index: 5;
+      padding: 0 6px;
+      font-size: 12px;
+      line-height: 18px;
+      color: #9ca3af;
+      background: rgba(17, 24, 39, 0.85);
+      border: 1px solid #4b5563;
+      border-radius: 3px;
+      cursor: pointer;
+      opacity: 0.55;
+    }
+    .fili-block-btn:hover {
+      opacity: 1;
+      color: #ef4444;
+      border-color: #ef4444;
+    }
+  `);
+
+  function setBlockLabel(btn, blocked) {
+    btn.textContent = blocked ? "unhide" : "✕";
+    btn.title = blocked
+      ? "Stop hiding this member"
+      : "Hide this member on every list";
+  }
+
+  function addBlockButton(card) {
+    if (card.querySelector(":scope > .fili-block-btn")) return;
+    if (!profilePath(card)) return;
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "fili-block-btn";
+    setBlockLabel(btn, isBlocked(card));
+
+    // The card itself is a link; keep the click from reaching it.
+    for (const type of ["pointerdown", "mousedown", "mouseup"]) {
+      btn.addEventListener(type, (e) => e.stopPropagation());
+    }
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleBlocked(card, btn);
+    });
+
+    card.appendChild(btn);
+  }
+
+  function toggleBlocked(card, btn) {
+    const path = profilePath(card);
+    if (!path) return;
+
+    if (blockedMembers.has(path)) {
+      // Only reachable while "Temporarily show all" has the card on screen,
+      // so leave it visible and just flip the label.
+      blockedMembers.delete(path);
+      saveBlocked();
+      setBlockLabel(btn, false);
+      return;
+    }
+
+    blockedMembers.add(path);
+    saveBlocked();
+    setBlockLabel(btn, true);
+    const unit = hideUnit(card);
+    unit.classList.add("fili-hidden");
+    unit.style.outline = "";
+    hiddenCount++;
+    hiddenWhy.blocked = (hiddenWhy.blocked || 0) + 1;
+    updateStatus();
+  }
+
+  const shouldHideWithoutBlocks = shouldHide;
+  shouldHide = function shouldHideWithBlocks(card) {
+    if (isBlocked(card)) {
+      lastHideReason = "blocked";
+      return true;
+    }
+    return shouldHideWithoutBlocks(card);
+  };
+
+  function updateBlockedCount() {
+    const el = document.getElementById("FiLiBlockedCount");
+    if (el) el.textContent = String(blockedMembers.size);
+  }
+
+  /** Adds the "members you hid" row above Save & apply. */
+  function injectBlockUI() {
+    if (document.getElementById("FiLiBlockedCount")) return;
+    const save = document.getElementById("FiLiSaveButton");
+    if (!save || !save.parentElement) return;
+
+    const sec = document.createElement("div");
+    sec.className = "fili-section";
+    sec.innerHTML = `
+      <b>Members you hid</b>
+      <span class="fili-status" id="FiLiBlockedCount">${blockedMembers.size}</span>
+      <span class="fili-action" id="FiLiUnblockAll">[unhide all]</span>
+      <div class="fili-small">
+        The ✕ in a card's corner hides that member on every list. To bring back
+        one person, use [Temporarily show all] and click "unhide" on their card.
+      </div>
+    `;
+    save.parentElement.insertAdjacentElement("beforebegin", sec);
+
+    sec.querySelector("#FiLiUnblockAll").onclick = () => {
+      if (!blockedMembers.size) return;
+      blockedMembers.clear();
+      saveBlocked();
+      document.querySelectorAll(".fili-block-btn").forEach((b) => setBlockLabel(b, false));
+      reapplyFilter();
+    };
+  }
+
+  const buildUIWithoutBlocks = buildUI;
+  buildUI = function buildUIWithBlocks() {
+    buildUIWithoutBlocks();
+    injectBlockUI();
   };
 
   // ─── Boot ─────────────────────────────────────────────────────────────────
