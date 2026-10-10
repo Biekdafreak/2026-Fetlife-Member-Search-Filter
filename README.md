@@ -33,8 +33,9 @@ is set to 2, so the two single-photo profiles are hidden, and the status line sa
 
 Other tools:
 
-- **[load N more pages]** pulls the next 1–10 pages of the list into the current one, so the
+- **[load N more pages]** pulls the next 1–100 pages of the list into the current one, so the
   filters apply across all of them. The Next button picks up after the last page you loaded.
+  While it runs, the button turns into **[stop]**.
 - **[check activity]** looks up when each visible member was last active. It only checks
   members who already pass your other filters, and it can be stopped at any time.
 - **Card size %** enlarges member cards (100–250%) so photos are easier to see.
@@ -137,6 +138,7 @@ pictures):
   members are hidden.
 - **2.15**: Number boxes are wide enough for four-digit values like the 1200 ms default.
 - **2.16**: A ✕ on every card hides that member for good, whatever their profile says.
+- **2.17**: Load up to 100 pages per click (was 10), with a [stop] button for long runs.
 
 ## Credits and license
 

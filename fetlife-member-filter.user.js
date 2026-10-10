@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         2026 Fetlife Member Filter
 // @namespace    http://tampermonkey.net/
-// @version      2.16
+// @version      2.17
 // @description  Filter FetLife member lists by gender, age, role, location, picture count and recent activity. Hides fake one-photo profiles, loads up to 10 pages at once, and filters cards before they render.
 // @author       Bull864
 // @author       genevera
@@ -668,9 +668,13 @@
   const PAGES_KEY = "FiLiPagesToLoad";
   const PAGE_MIN_DELAY_MS = 900;
   const PAGE_MAX_DELAY_MS = 1800;
-  const PAGE_LIMIT = 10;
+  // Volume isn't what Cloudflare reacts to; the sequential, jittered pace is
+  // what keeps this quiet. Long runs are stoppable, and a challenge page
+  // (a non-OK status) ends the run on its own.
+  const PAGE_LIMIT = 100;
 
   let loadingPages = false;
+  let abortPages = false;
 
   // How far the merged list actually reaches. The paginator still points at the
   // page we started on, so without this "Next" walks back through members we
@@ -781,7 +785,11 @@
   }
 
   async function loadMorePages() {
-    if (loadingPages) return;
+    // A second click while loading stops the run after the current page.
+    if (loadingPages) {
+      abortPages = true;
+      return;
+    }
 
     const shape = listShape();
     if (!shape) {
@@ -790,8 +798,9 @@
     }
 
     loadingPages = true;
+    abortPages = false;
     const btn = document.getElementById("FiLiLoadPages");
-    if (btn) btn.textContent = "[loading…]";
+    if (btn) btn.textContent = "[stop]";
 
     const wanted = getPagesToLoad();
     const seen = seenKeys(shape.depth);
@@ -802,8 +811,12 @@
 
     try {
       for (let i = 0; i < wanted; i += 1) {
+        if (abortPages) {
+          note = "stopped";
+          break;
+        }
         page += 1;
-        setPageStatus(`fetching page ${page}…`);
+        setPageStatus(`fetching page ${page} (${i + 1} of ${wanted})…`);
         url.searchParams.set("page", String(page));
 
         const res = await fetch(url.toString(), { credentials: "same-origin" });
@@ -861,7 +874,9 @@
       retargetPagination();
       const reach =
         typeof loadedThroughPage === "number" ? ` · through p${loadedThroughPage}` : "";
-      setPageStatus((note || (added ? `added ${added}` : "nothing new")) + reach);
+      const summary =
+        [added ? `added ${added}` : "", note].filter(Boolean).join(" · ") || "nothing new";
+      setPageStatus(summary + reach);
     } catch (err) {
       setPageStatus(`failed: ${err.message}`);
     } finally {
@@ -920,7 +935,8 @@
                  min="1" max="${PAGE_LIMIT}" value="${getPagesToLoad()}">
         </div>
         <div class="fili-small">
-          Fetched one at a time, about a second apart, to stay out of Cloudflare's way.
+          1–${PAGE_LIMIT}. Fetched one at a time, about a second apart, to stay out of
+          Cloudflare's way. Click [stop] in the header to end a long run early.
         </div>
         <div class="fili-inline-row" style="margin-top:8px;">
           <label class="fili-small">Card size %</label>
