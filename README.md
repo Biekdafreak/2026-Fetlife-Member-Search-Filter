@@ -100,9 +100,11 @@ each member's activity page and reads the newest timestamp on it. In practice:
 
 ## Limitations
 
-- **FetLife caps how deep a list goes,** at around page 455 (roughly 9,000 members), even
-  when the group or place is bigger. This can't be worked around. For a large place, use its
-  **Places within** tab and filter city by city instead.
+- **FetLife shows at most 10,000 members of any list,** and often a bit fewer (one large state
+  stops at page 459, about 9,180 members), with no way to sort the list differently. Past that it
+  repeats its last page; the loader detects this and stops. This can't be worked around. For a
+  large place, use its **Places within** tab and filter city by city, and try the member lists
+  of large local groups.
 - **"Last active" counts any activity** on a member's activity page: posts, pictures, loves,
   comments, RSVPs, and so on.
 - **Read FetLife's terms and decide for yourself.** The script does nothing you couldn't do
@@ -139,6 +141,8 @@ pictures):
 - **2.15**: Number boxes are wide enough for four-digit values like the 1200 ms default.
 - **2.16**: A ✕ on every card hides that member for good, whatever their profile says.
 - **2.17**: Load up to 100 pages per click (was 10), with a [stop] button for long runs.
+- **2.18**: Page loading stops at the end of FetLife's 10,000-member cap instead of refetching
+  the last page over and over.
 
 ## Credits and license
 

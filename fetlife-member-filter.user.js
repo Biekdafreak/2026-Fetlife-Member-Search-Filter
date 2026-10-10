@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         2026 Fetlife Member Filter
 // @namespace    http://tampermonkey.net/
-// @version      2.17
+// @version      2.18
 // @description  Filter FetLife member lists by gender, age, role, location, picture count and recent activity. Hides fake one-photo profiles, loads up to 10 pages at once, and filters cards before they render.
 // @author       Bull864
 // @author       genevera
@@ -676,6 +676,9 @@
   let loadingPages = false;
   let abortPages = false;
 
+  // FetLife's notice on the last page of a capped list.
+  const END_OF_LIST_RE = /reached the end of the ride/i;
+
   // How far the merged list actually reaches. The paginator still points at the
   // page we started on, so without this "Next" walks back through members we
   // already pulled in, and a second click refetches the same pages.
@@ -832,8 +835,16 @@
           break;
         }
 
+        // FetLife shows at most 10,000 of any list. Past that it doesn't
+        // return an empty page: it serves its last page again, whatever
+        // number was asked for, with an "end of the ride" notice. Without
+        // these checks a run sailed past the end refetching the same 20
+        // people and counting pages that don't exist.
+        const atEnd = END_OF_LIST_RE.test(doc.body ? doc.body.textContent : "");
+
         const frag = document.createDocumentFragment();
         const pending = [];
+        let addedHere = 0;
         cards.forEach((c) => {
           const unit = climb(c, shape.depth);
           const key = cardKey(unit);
@@ -843,8 +854,13 @@
           imported.classList.add("fili-hidden");
           frag.appendChild(imported);
           pending.push(imported);
-          added += 1;
+          addedHere += 1;
         });
+        added += addedHere;
+        if (!addedHere) {
+          note = "end of the list (FetLife shows at most 10,000)";
+          break;
+        }
         shape.container.appendChild(frag);
         // Arrive hidden, then judge each card in this same task, so nothing
         // paints in between and a rejected member never flashes. Judging must
@@ -857,6 +873,11 @@
           if (card) processCard(card);
         });
         loadedThroughPage = page;
+
+        if (atEnd) {
+          note = "end of the list (FetLife shows at most 10,000)";
+          break;
+        }
 
         if (i < wanted - 1) {
           await new Promise((r) =>
@@ -872,8 +893,10 @@
       processAllCards();
       updateStatus();
       retargetPagination();
+      // Only when this run got somewhere; otherwise loadedThroughPage is just
+      // the page number in the URL, which past the cap isn't a real page.
       const reach =
-        typeof loadedThroughPage === "number" ? ` · through p${loadedThroughPage}` : "";
+        added && typeof loadedThroughPage === "number" ? ` · through p${loadedThroughPage}` : "";
       const summary =
         [added ? `added ${added}` : "", note].filter(Boolean).join(" · ") || "nothing new";
       setPageStatus(summary + reach);
