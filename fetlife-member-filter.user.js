@@ -336,6 +336,11 @@
     }
 
     updateStatus();
+    // Activity lookup is queued after the card has been judged by the cheap
+    // filters. The queue helper is initialized before the page boot runs.
+    if (typeof queueAutomaticActivityChecks === "function") {
+      queueAutomaticActivityChecks();
+    }
   }
 
   function processAllCards() {
@@ -373,6 +378,9 @@
           node.querySelectorAll(CARD_SELECTOR).forEach(processCard);
         }
       }
+    }
+    if (typeof queueAutomaticActivityChecks === "function") {
+      queueAutomaticActivityChecks();
     }
   });
 
@@ -928,7 +936,14 @@
     check.className = "fili-unhide-btn";
     check.id = "FiLiCheckActivity";
     check.textContent = "[check activity]";
-    check.onclick = checkActivity;
+    check.onclick = () => {
+      if (checkingActivity) {
+        activityPaused = true;
+        abortActivity = true;
+        return;
+      }
+      checkActivity(false);
+    };
 
     const actStatus = document.createElement("span");
     actStatus.className = "fili-status";
@@ -1132,7 +1147,7 @@
   //   * answers are cached for 30 days; "inactive for 2 years" does not
   //     change meaningfully within a month
   //   * strictly sequential, jittered, capped per run, abortable
-  //   * never automatic — it runs on an explicit click
+  //   * automatically queued as eligible cards arrive
   //
   // Each /activity page carries ISO timestamps in <time datetime="…">. We take
   // the newest one on the page rather than the first in document order, since
@@ -1166,6 +1181,9 @@
 
   let checkingActivity = false;
   let abortActivity = false;
+  let activityPaused = false;
+  const pendingActivityPaths = new Set();
+  const inFlightActivityPaths = new Set();
 
   // shouldHide() runs per card on every reapply, so reading these from GM
   // storage each time meant dozens of synchronous storage hits per filter
@@ -1288,12 +1306,7 @@
     if (el) el.textContent = msg;
   }
 
-  async function checkActivity() {
-    if (checkingActivity) {
-      abortActivity = true;
-      return;
-    }
-
+  function collectActivityTargets() {
     const depth = unitDepth();
     const targets = new Set();
     const ttl = actTtlMs();
@@ -1303,16 +1316,38 @@
       // instead meant that with "show unchecked" off, nobody ever got checked.
       if (originalShouldHide(card)) return;
       const path = profilePath(card);
-      if (!path || blockedMembers.has(path)) return;
+      if (!path || blockedMembers.has(path) || inFlightActivityPaths.has(path)) return;
       const hit = activityCache[path];
       if (hit && Date.now() - hit.checked < ttl) return;
       targets.add(path);
     });
+    return targets;
+  }
 
-    const cap = getActPerRun();
-    const list = cap ? [...targets].slice(0, cap) : [...targets];
+  function queueAutomaticActivityChecks() {
+    if (activityPaused || !actConfig().thresholdMs) return;
+    const targets = collectActivityTargets();
+    if (!targets.size) return;
+    targets.forEach((path) => pendingActivityPaths.add(path));
+    if (!checkingActivity) checkActivity(true);
+  }
+
+  async function checkActivity(automatic = false) {
+    if (checkingActivity) {
+      if (automatic) collectActivityTargets().forEach((path) => pendingActivityPaths.add(path));
+      return;
+    }
+    if (!automatic) activityPaused = false;
+
+    const targets = collectActivityTargets();
+    targets.forEach((path) => pendingActivityPaths.add(path));
+
+    // The existing per-click cap continues to apply to manual runs. Automatic
+    // work drains the live result queue in sequential batches as cards arrive.
+    const cap = automatic ? 0 : getActPerRun();
+    const list = cap ? [...pendingActivityPaths].slice(0, cap) : [...pendingActivityPaths];
     if (!list.length) {
-      setActivityStatus("nothing new to check");
+      if (!automatic) setActivityStatus("nothing new to check");
       reapplyFilter();
       return;
     }
@@ -1326,7 +1361,9 @@
     const actDelay = getActDelay();
     try {
       for (const path of list) {
-        if (abortActivity) break;
+        if (abortActivity || (automatic && !actConfig().thresholdMs)) break;
+        pendingActivityPaths.delete(path);
+        inFlightActivityPaths.add(path);
         setActivityStatus(`checking ${done + 1}/${list.length}…`);
 
         try {
@@ -1344,9 +1381,13 @@
           }
         } catch (e) {
           activityCache[path] = { ts: null, checked: Date.now() };
+        } finally {
+          inFlightActivityPaths.delete(path);
         }
 
         done += 1;
+        saveActivityCache();
+        reapplyFilter();
         if (done < list.length && !abortActivity) {
           await new Promise((r) =>
             setTimeout(r, actDelay + Math.random() * actDelay * 0.4)
@@ -1358,13 +1399,18 @@
       checkingActivity = false;
       const b = document.getElementById("FiLiCheckActivity");
       if (b) b.textContent = "[check activity]";
-      const remaining = targets.size - done;
+      const remaining = pendingActivityPaths.size;
       setActivityStatus(
         `checked ${done}` +
           (abortActivity ? " (stopped)" : "") +
           (remaining > 0 ? ` · ${remaining} left` : "")
       );
       reapplyFilter();
+      // Cards may have arrived while a request or delay was in progress.
+      // Drain them in another sequential run without resetting the stop state.
+      if (automatic && !abortActivity && pendingActivityPaths.size && actConfig().thresholdMs) {
+        setTimeout(() => checkActivity(true), 0);
+      }
     }
   }
 
@@ -1556,11 +1602,17 @@
     const original = history[method];
     history[method] = function (...args) {
       const result = original.apply(this, args);
-      setTimeout(buildUI, 0);
+      setTimeout(() => {
+        buildUI();
+        queueAutomaticActivityChecks();
+      }, 0);
       return result;
     };
   }
-  addEventListener("popstate", () => setTimeout(buildUI, 0));
+  addEventListener("popstate", () => setTimeout(() => {
+    buildUI();
+    queueAutomaticActivityChecks();
+  }, 0));
 
   // And whenever the DOM settles into a new shape, in case a route renders
   // its header after the navigation event. Coalesced into animation frames so

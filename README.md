@@ -36,8 +36,9 @@ Other tools:
 - **[load N more pages]** pulls the next 1–100 pages of the list into the current one, so the
   filters apply across all of them. The Next button picks up after the last page you loaded.
   While it runs, the button turns into **[stop]**.
-- **[check activity]** looks up when each visible member was last active. It only checks
-  members who already pass your other filters, and it can be stopped at any time.
+- **Activity checking starts automatically** when an inactivity window is enabled. It checks
+  eligible members as results appear, including profiles added by the page loader, and can be
+  paused with **[stop]**. **[check activity]** remains available to start or resume checks.
 - **Card size %** enlarges member cards (100–250%) so photos are easier to see.
 - **A status line** explains why members are hidden, e.g.
   `(52 hidden: 40 by your filters · 9 inactive · 3 not checked yet)`.
@@ -71,7 +72,8 @@ carry over.
 1. Click **[Options]** on the FilterLife panel, set your filters and click **[Save & apply]**.
 2. *(Optional)* Click **[load N more pages]** to pull in more of the list.
 3. *(Optional, for the activity filter)* Set **Hide members inactive over** (for example
-   `1 months`), then click **[check activity]** in the panel header.
+   `1 months`). Eligible profiles are checked automatically as results load. Use
+   **[check activity]** in the panel header to resume after pausing.
 
 ### How the activity filter works
 
@@ -92,9 +94,10 @@ each member's activity page and reads the newest timestamp on it. In practice:
 
 - **Everything runs in your browser.** Settings and the activity cache are stored locally in
   Tampermonkey. There's no server, account, analytics or tracking.
-- **The script only talks to fetlife.com**, using your existing session, and only when you
-  click [load N more pages] or [check activity]. It makes no requests in the background.
-- **It never sends requests in parallel.** They go one at a time with a randomized gap, and
+- **The script only talks to fetlife.com**, using your existing session. It loads pages when
+  you click [load N more pages], and checks activity automatically when the inactivity window
+  is enabled. No activity requests are made while that filter is off or after you pause checks.
+- **Activity requests never run in parallel.** They go one at a time with a randomized gap, and
   page loading is capped at 10 pages per click. FetLife is behind Cloudflare, and bursts of
   requests look like scraping.
 
@@ -116,7 +119,8 @@ each member's activity page and reads the newest timestamp on it. In practice:
   Scripts** is on (step 2 above) and the script is switched on in the Tampermonkey dashboard.
   The Tampermonkey icon should show a **1** on fetlife.com.
 - **"Barely anyone is showing."** Read the status line. Usually the activity filter is on
-  with "show unchecked" off, so everyone stays hidden until you click [check activity].
+  with "show unchecked" off, so unchecked profiles stay hidden until they are reached in the
+  automatic queue or you click [check activity].
 - **Something broke after a FetLife update.** Please
   [open an issue](https://github.com/Biekdafreak/2026-Fetlife-Member-Search-Filter/issues)
   and say which page it happened on.
