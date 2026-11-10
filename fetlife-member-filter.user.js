@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         2026 Fetlife Member Filter
 // @namespace    http://tampermonkey.net/
-// @version      2.19
+// @version      2.20
 // @description  Filter FetLife member lists by gender, age, role, location, picture count and recent activity. Hides fake one-photo profiles, loads up to 10 pages at once, and filters cards before they render.
 // @author       Bull864
 // @author       genevera
@@ -679,6 +679,93 @@
   // looks like scraping. So they are strictly sequential, spaced with jitter,
   // capped, and only ever fired by an explicit click.
 
+  // ─── Cross-tab request pacing and lockout detection ───────────────────────
+  //
+  // Every pace in this script was per-tab: the delays, the caps, the pause
+  // flag are all module state inside one IIFE, so a second tab was a second
+  // scheduler that knew nothing about the first. Two tabs searching two
+  // cities therefore doubled the request rate against a single account,
+  // which is what tripped FetLife's security system into a lockout.
+  //
+  // GM storage is one store per script, shared between tabs and synchronous,
+  // so a single timestamp in it can serialise every request this script
+  // makes anywhere. Tabs now queue behind each other instead of racing.
+
+  const GATE_KEY = "FiLiRequestGate";
+  const TAB_ID = Math.random().toString(36).slice(2);
+  // Never block a request forever on a gate: a tab that closed mid-claim
+  // would otherwise hold everyone up.
+  const GATE_MAX_WAIT_MS = 30000;
+
+  function sleep(ms) {
+    return new Promise((r) => setTimeout(r, ms));
+  }
+
+  function readGate() {
+    try {
+      const g = JSON.parse(GM_getValue(GATE_KEY, "null"));
+      if (g && typeof g.at === "number") return g;
+    } catch (e) {
+      /* fall through to a fresh gate */
+    }
+    return { at: 0, by: null };
+  }
+
+  /**
+   * Hold until at least minGapMs has passed since the last request made by
+   * any tab, then claim the slot.
+   *
+   * Two tabs can read the same free slot before either writes, so the claim
+   * is written and then read back: whoever's write landed last owns it and
+   * proceeds, the other waits another gap. Costs one short sleep per request
+   * and is a no-op for a single tab, where the existing per-request delay
+   * has already elapsed by the time the gate is consulted.
+   */
+  async function gateRequest(minGapMs) {
+    const started = Date.now();
+    for (;;) {
+      const gate = readGate();
+      const now = Date.now();
+      const wait = gate.at + minGapMs - now;
+
+      if (wait > 0) {
+        if (now - started > GATE_MAX_WAIT_MS) return;
+        await sleep(Math.min(wait, 250) + Math.random() * 60);
+        continue;
+      }
+
+      GM_setValue(GATE_KEY, JSON.stringify({ at: now, by: TAB_ID }));
+      await sleep(15 + Math.random() * 35);
+      if (readGate().by === TAB_ID) return;
+      if (Date.now() - started > GATE_MAX_WAIT_MS) return;
+    }
+  }
+
+  // FetLife's lockout page. This is not a rate limit to back off from and
+  // retry — requests made while locked out are themselves what lengthens the
+  // lockout, so everything stops and stays stopped until the user says
+  // otherwise.
+  const LOCKOUT_RE = /temporarily locked out|tripped our security system/i;
+  const LOCKOUT_NOTE =
+    "FetLife locked this account out — everything stopped. Wait it out, then reload.";
+
+  let lockedOut = false;
+
+  /** True when the body is a lockout page; halts all activity if so. */
+  function noteLockoutIf(html, where) {
+    if (lockedOut) return true;
+    if (!html || !LOCKOUT_RE.test(html)) return false;
+    lockedOut = true;
+    activityPaused = true;
+    abortActivity = true;
+    abortPages = true;
+    pendingActivityPaths.clear();
+    console.warn(`[FiLi] locked out (detected during ${where}) — stopping`);
+    setActivityStatus(LOCKOUT_NOTE);
+    setPageStatus(LOCKOUT_NOTE);
+    return true;
+  }
+
   const PAGES_KEY = "FiLiPagesToLoad";
   const PAGE_MIN_DELAY_MS = 900;
   const PAGE_MAX_DELAY_MS = 1800;
@@ -803,6 +890,10 @@
   }
 
   async function loadMorePages() {
+    if (lockedOut) {
+      setPageStatus(LOCKOUT_NOTE);
+      return;
+    }
     // A second click while loading stops the run after the current page.
     if (loadingPages) {
       abortPages = true;
@@ -846,13 +937,20 @@
         setPageStatus(`fetching page ${page} (${i + 1} of ${wanted})…`);
         url.searchParams.set("page", String(page));
 
+        await gateRequest(PAGE_MIN_DELAY_MS);
         const res = await fetch(url.toString(), { credentials: "same-origin" });
         if (!res.ok) {
           note = `page ${page} returned ${res.status} — stopped`;
           break;
         }
 
-        const doc = new DOMParser().parseFromString(await res.text(), "text/html");
+        const html = await res.text();
+        if (noteLockoutIf(html, "page load")) {
+          note = LOCKOUT_NOTE;
+          break;
+        }
+
+        const doc = new DOMParser().parseFromString(html, "text/html");
         const cards = doc.querySelectorAll(CARD_SELECTOR);
         if (!cards.length) {
           note = `no more results after page ${page - 1}`;
@@ -1237,17 +1335,37 @@
     return Math.min(5000, Math.max(100, isFinite(n) && n ? n : 1200));
   }
 
-  let activityCache = (() => {
+  function readActivityCache() {
     try {
       return JSON.parse(GM_getValue(ACT_CACHE_KEY, "{}")) || {};
     } catch (e) {
       return {};
     }
-  })();
+  }
 
+  let activityCache = readActivityCache();
+
+  /**
+   * Merge this tab's answers into whatever is stored, newest per member.
+   *
+   * This used to write the in-memory object back whole. Each tab read the
+   * cache once at startup, so two tabs both wrote their own snapshot and
+   * the last writer erased the other's lookups — duplicated requests and
+   * discarded answers at the same time. Re-reading and merging also pulls
+   * in what the other tab has learned since, so tabs now help each other.
+   */
   function saveActivityCache() {
     try {
-      GM_setValue(ACT_CACHE_KEY, JSON.stringify(activityCache));
+      const stored = readActivityCache();
+      for (const path of Object.keys(activityCache)) {
+        const mine = activityCache[path];
+        const theirs = stored[path];
+        if (!theirs || (mine.checked || 0) >= (theirs.checked || 0)) {
+          stored[path] = mine;
+        }
+      }
+      activityCache = stored;
+      GM_setValue(ACT_CACHE_KEY, JSON.stringify(stored));
     } catch (e) {
       /* quota — the cache is an optimisation, not state we must keep */
     }
@@ -1368,7 +1486,7 @@
   }
 
   function queueAutomaticActivityChecks() {
-    if (activityPaused || !actConfig().thresholdMs) return;
+    if (lockedOut || activityPaused || !actConfig().thresholdMs) return;
     if (!refreshPendingActivity()) return;
     if (!checkingActivity) checkActivity(true);
   }
@@ -1407,6 +1525,10 @@
 
   async function checkActivity(automatic = false) {
     if (checkingActivity) return;
+    if (lockedOut) {
+      setActivityStatus(LOCKOUT_NOTE);
+      return;
+    }
     if (!automatic) {
       activityPaused = false;
       skipActivityPaths.clear();
@@ -1452,12 +1574,18 @@
 
         let refused = 0;
         try {
+          await gateRequest(actDelay);
           const res = await fetch(location.origin + path + "/activity", {
             credentials: "same-origin"
           });
-          if (res.ok) {
+          // A lockout can arrive as an ordinary 200 page or behind a 403,
+          // so read the body in both cases before trusting the status.
+          const body = res.ok || res.status === 403 ? await res.text() : "";
+          if (noteLockoutIf(body, "activity lookup")) {
+            failures = 0;
+          } else if (res.ok) {
             activityCache[path] = {
-              ts: latestActivityFrom(await res.text()),
+              ts: latestActivityFrom(body),
               checked: Date.now()
             };
             failures = 0;
@@ -1477,6 +1605,11 @@
           failures += 1;
         } finally {
           inFlightActivityPaths.delete(path);
+        }
+
+        if (lockedOut) {
+          note = LOCKOUT_NOTE;
+          break;
         }
 
         if (refused || failures >= 3) {
