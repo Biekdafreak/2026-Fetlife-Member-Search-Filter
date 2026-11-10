@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         2026 Fetlife Member Filter
 // @namespace    http://tampermonkey.net/
-// @version      2.18
+// @version      2.19
 // @description  Filter FetLife member lists by gender, age, role, location, picture count and recent activity. Hides fake one-photo profiles, loads up to 10 pages at once, and filters cards before they render.
 // @author       Bull864
 // @author       genevera
@@ -318,6 +318,10 @@
   let hiddenWhy = {};
   let lastHideReason = "filters";
 
+  // True while [Temporarily show all] is in effect, so an activity answer
+  // arriving a second later doesn't hide everything again.
+  let showAllActive = false;
+
   function resetHiddenCounts() {
     hiddenCount = 0;
     hiddenWhy = {};
@@ -333,14 +337,16 @@
       hideUnit(card).classList.add("fili-hidden");
       hiddenCount++;
       hiddenWhy[lastHideReason] = (hiddenWhy[lastHideReason] || 0) + 1;
+      // Remembered so one card can be re-judged later without recounting all.
+      card.dataset.filiWhy = lastHideReason;
+    } else {
+      delete card.dataset.filiWhy;
     }
 
     updateStatus();
-    // Activity lookup is queued after the card has been judged by the cheap
-    // filters. The queue helper is initialized before the page boot runs.
-    if (typeof queueAutomaticActivityChecks === "function") {
-      queueAutomaticActivityChecks();
-    }
+    // Activity lookups are queued once per batch of cards, not once per card:
+    // the queue pass walks the whole list, so per-card calls were quadratic.
+    scheduleActivityQueue();
   }
 
   function processAllCards() {
@@ -379,9 +385,7 @@
         }
       }
     }
-    if (typeof queueAutomaticActivityChecks === "function") {
-      queueAutomaticActivityChecks();
-    }
+    scheduleActivityQueue();
   });
 
   // Observe <html>, not <body>. FetLife navigates without a page load and can
@@ -556,6 +560,7 @@
         el.classList.remove("fili-hidden");
         el.style.outline = "2px solid #ef4444";
       });
+      showAllActive = true;
       resetHiddenCounts();
       updateStatus();
       document.getElementById("FiLiMainContent").classList.remove("fili-open");
@@ -649,6 +654,7 @@
    * Resets processed state so shouldHide() runs fresh.
    */
   function reapplyFilter() {
+    showAllActive = false;
     resetHiddenCounts();
     document.querySelectorAll(CARD_SELECTOR).forEach((card) => {
       card.dataset.filiProcessed = undefined;
@@ -692,6 +698,7 @@
   // already pulled in, and a second click refetches the same pages.
   let loadedThroughPage = null;
   let loadedForBase = null;
+  let loadedForHref = null;
 
   function currentBase() {
     const u = new URL(location.href);
@@ -812,6 +819,15 @@
     abortPages = false;
     const btn = document.getElementById("FiLiLoadPages");
     if (btn) btn.textContent = "[stop]";
+
+    // Activity is checked while the pages come in, not after: each merged
+    // card joins the lookup queue as it lands. Asking for more pages also
+    // lifts an earlier pause, since new members are what was asked for.
+    if (actConfig().thresholdMs) {
+      activityPaused = false;
+      skipActivityPaths.clear();
+      scheduleActivityQueue();
+    }
 
     const wanted = getPagesToLoad();
     const seen = seenKeys(shape.depth);
@@ -1006,11 +1022,12 @@
         </div>
         <div class="fili-small">
           Recency comes from each member's activity page — one request each,
-          spaced by the delay below, up to the per-click limit below. Each answer is
-          re-checked after a quarter of the window above (1–30 days), so a short
-          window stays accurate.
-          Set your other filters first, then use [check activity] in the header:
-          only members that survived those get looked up.
+          spaced by the delay below. Checks start on their own and keep running
+          while [load more pages] pulls pages in, so members are judged as they
+          arrive. Each answer is re-checked after a quarter of the window above
+          (1–30 days), so a short window stays accurate. Only members that
+          survive your other filters get looked up. [stop] pauses the checks;
+          [check activity] resumes them.
         </div>
         <div class="fili-inline-row" style="margin-top:6px;">
           <label class="fili-small">Delay between requests (ms)</label>
@@ -1018,10 +1035,10 @@
                  min="100" max="5000" step="50" value="${getActDelay()}">
         </div>
         <div class="fili-inline-row" style="margin-top:6px;">
-          <label class="fili-small">Profiles to check per click</label>
+          <label class="fili-small">Profiles to check per run</label>
           <input type="number" class="fili-numeric" id="FiLiPerRunInput"
                  min="0" max="${ACT_PER_RUN_MAX}" step="10" value="${getActPerRun()}">
-          <span class="fili-small">(0 = everyone on the page)</span>
+          <span class="fili-small">(0 = no limit)</span>
         </div>
         <div class="fili-small">
           Lower is faster and more conspicuous. Wall-clock speed is just request
@@ -1096,8 +1113,14 @@
   buildUI = function buildUIWithPageLoader() {
     applyCardScale(getCardScale());
     unitDepthCache = null; // re-measure: a different route may nest differently
-    loadedThroughPage = null;
-    loadedForBase = null;
+    // Forget how far the merged list reaches only when the address changed.
+    // This runs on every pushState/replaceState, and resetting each time made
+    // the next click refetch merged pages and report a false end of list.
+    if (loadedForHref !== location.href) {
+      loadedForHref = location.href;
+      loadedThroughPage = null;
+      loadedForBase = null;
+    }
     originalBuildUI();
     injectPageLoaderUI();
   };
@@ -1184,6 +1207,11 @@
   let activityPaused = false;
   const pendingActivityPaths = new Set();
   const inFlightActivityPaths = new Set();
+  // Lookups that failed for a reason that says nothing about the member (a
+  // rate limit, a network drop). Not cached, and not retried until the next
+  // manual start, so one bad answer can't loop or be mistaken for inactivity.
+  const skipActivityPaths = new Set();
+  let activityQueueScheduled = false;
 
   // shouldHide() runs per card on every reapply, so reading these from GM
   // storage each time meant dozens of synchronous storage hits per filter
@@ -1307,16 +1335,23 @@
   }
 
   function collectActivityTargets() {
-    const depth = unitDepth();
     const targets = new Set();
     const ttl = actTtlMs();
     document.querySelectorAll(CARD_SELECTOR).forEach((card) => {
-      // Skip members the other filters reject, but not ones hidden only
-      // because their activity is unknown or stale. Checking the hidden class
-      // instead meant that with "show unchecked" off, nobody ever got checked.
-      if (originalShouldHide(card)) return;
+      // Only members the other filters let through. That verdict was recorded
+      // when the card was judged; re-running the filters here would mean
+      // reading text off cards that are hidden for "not checked yet", which
+      // is both slow and unreliable.
+      if (card.dataset.filiEligible !== "1") return;
       const path = profilePath(card);
-      if (!path || blockedMembers.has(path) || inFlightActivityPaths.has(path)) return;
+      if (
+        !path ||
+        blockedMembers.has(path) ||
+        inFlightActivityPaths.has(path) ||
+        skipActivityPaths.has(path)
+      ) {
+        return;
+      }
       const hit = activityCache[path];
       if (hit && Date.now() - hit.checked < ttl) return;
       targets.add(path);
@@ -1324,31 +1359,62 @@
     return targets;
   }
 
+  /** Rebuild the queue from what is on screen now; stale entries drop out. */
+  function refreshPendingActivity() {
+    const targets = collectActivityTargets();
+    pendingActivityPaths.clear();
+    targets.forEach((path) => pendingActivityPaths.add(path));
+    return targets.size;
+  }
+
   function queueAutomaticActivityChecks() {
     if (activityPaused || !actConfig().thresholdMs) return;
-    const targets = collectActivityTargets();
-    if (!targets.size) return;
-    targets.forEach((path) => pendingActivityPaths.add(path));
+    if (!refreshPendingActivity()) return;
     if (!checkingActivity) checkActivity(true);
   }
 
+  /** One queue pass per burst of new cards, however many cards that is. */
+  function scheduleActivityQueue() {
+    if (activityQueueScheduled) return;
+    activityQueueScheduled = true;
+    setTimeout(() => {
+      activityQueueScheduled = false;
+      queueAutomaticActivityChecks();
+    }, 0);
+  }
+
+  /**
+   * Re-judge just the card(s) of one member after their answer comes in.
+   * Re-filtering the whole list per answer was the slow part once a few
+   * hundred members were merged, and it also undid [Temporarily show all].
+   */
+  function rejudgePath(path) {
+    if (showAllActive) return;
+    document.querySelectorAll(CARD_SELECTOR).forEach((card) => {
+      if (profilePath(card) !== path) return;
+      const unit = hideUnit(card);
+      if (unit.classList.contains("fili-hidden")) {
+        const why = card.dataset.filiWhy;
+        // Must be visible before it is judged again (see loadMorePages).
+        unit.classList.remove("fili-hidden");
+        hiddenCount = Math.max(0, hiddenCount - 1);
+        if (why && hiddenWhy[why]) hiddenWhy[why] -= 1;
+      }
+      delete card.dataset.filiProcessed;
+      processCard(card);
+    });
+  }
+
   async function checkActivity(automatic = false) {
-    if (checkingActivity) {
-      if (automatic) collectActivityTargets().forEach((path) => pendingActivityPaths.add(path));
-      return;
+    if (checkingActivity) return;
+    if (!automatic) {
+      activityPaused = false;
+      skipActivityPaths.clear();
     }
-    if (!automatic) activityPaused = false;
 
-    const targets = collectActivityTargets();
-    targets.forEach((path) => pendingActivityPaths.add(path));
-
-    // The existing per-click cap continues to apply to manual runs. Automatic
-    // work drains the live result queue in sequential batches as cards arrive.
-    const cap = automatic ? 0 : getActPerRun();
-    const list = cap ? [...pendingActivityPaths].slice(0, cap) : [...pendingActivityPaths];
-    if (!list.length) {
+    refreshPendingActivity();
+    if (!pendingActivityPaths.size) {
       if (!automatic) setActivityStatus("nothing new to check");
-      reapplyFilter();
       return;
     }
 
@@ -1357,15 +1423,34 @@
     const btn = document.getElementById("FiLiCheckActivity");
     if (btn) btn.textContent = "[stop]";
 
-    let done = 0;
+    const cap = getActPerRun();
     const actDelay = getActDelay();
+    let done = 0;
+    let failures = 0;
+    let note = "";
     try {
-      for (const path of list) {
-        if (abortActivity || (automatic && !actConfig().thresholdMs)) break;
+      // The queue is live: members merged in by [load more pages] while this
+      // runs join it and are checked in the same run.
+      while (pendingActivityPaths.size) {
+        if (abortActivity) {
+          note = "stopped";
+          break;
+        }
+        if (automatic && !actConfig().thresholdMs) break;
+        if (cap && done >= cap) {
+          activityPaused = true;
+          note = `limit of ${cap} per run reached`;
+          break;
+        }
+
+        const path = pendingActivityPaths.values().next().value;
         pendingActivityPaths.delete(path);
         inFlightActivityPaths.add(path);
-        setActivityStatus(`checking ${done + 1}/${list.length}…`);
+        setActivityStatus(
+          `checking activity… ${done} done · ${pendingActivityPaths.size + 1} left`
+        );
 
+        let refused = 0;
         try {
           const res = await fetch(location.origin + path + "/activity", {
             credentials: "same-origin"
@@ -1375,20 +1460,44 @@
               ts: latestActivityFrom(await res.text()),
               checked: Date.now()
             };
-          } else {
-            // Record the attempt so a dead profile isn't retried all session.
+            failures = 0;
+          } else if (res.status === 404 || res.status === 410) {
+            // A profile that is gone: remember it so it isn't asked again.
             activityCache[path] = { ts: null, checked: Date.now() };
+            failures = 0;
+          } else {
+            // Anything else says nothing about the member. Caching it would
+            // mark them "no activity found" for days.
+            skipActivityPaths.add(path);
+            failures += 1;
+            if (res.status === 403 || res.status === 429) refused = res.status;
           }
         } catch (e) {
-          activityCache[path] = { ts: null, checked: Date.now() };
+          skipActivityPaths.add(path);
+          failures += 1;
         } finally {
           inFlightActivityPaths.delete(path);
         }
 
-        done += 1;
-        saveActivityCache();
-        reapplyFilter();
-        if (done < list.length && !abortActivity) {
+        if (refused || failures >= 3) {
+          // Being refused means slow down, not push on.
+          activityPaused = true;
+          note = refused
+            ? `FetLife answered ${refused} — paused, [check activity] resumes`
+            : "3 lookups failed in a row — paused, [check activity] resumes";
+          break;
+        }
+
+        if (!failures) {
+          done += 1;
+          if (done % 10 === 0) saveActivityCache();
+          rejudgePath(path);
+        }
+
+        // Pick up anyone who arrived during that request before deciding
+        // whether there is more to do.
+        refreshPendingActivity();
+        if (pendingActivityPaths.size && !abortActivity) {
           await new Promise((r) =>
             setTimeout(r, actDelay + Math.random() * actDelay * 0.4)
           );
@@ -1401,16 +1510,11 @@
       if (b) b.textContent = "[check activity]";
       const remaining = pendingActivityPaths.size;
       setActivityStatus(
-        `checked ${done}` +
-          (abortActivity ? " (stopped)" : "") +
-          (remaining > 0 ? ` · ${remaining} left` : "")
+        [`checked ${done}`, note, remaining > 0 ? `${remaining} left` : ""]
+          .filter(Boolean)
+          .join(" · ")
       );
-      reapplyFilter();
-      // Cards may have arrived while a request or delay was in progress.
-      // Drain them in another sequential run without resetting the stop state.
-      if (automatic && !abortActivity && pendingActivityPaths.size && actConfig().thresholdMs) {
-        setTimeout(() => checkActivity(true), 0);
-      }
+      updateStatus();
     }
   }
 
@@ -1419,9 +1523,12 @@
   const originalShouldHide = shouldHide;
   shouldHide = function shouldHideWithActivity(card) {
     if (originalShouldHide(card)) {
+      delete card.dataset.filiEligible;
       lastHideReason = "filters";
       return true;
     }
+    // Passed every other filter, so this member is worth an activity lookup.
+    card.dataset.filiEligible = "1";
     const reason = activityReason(card);
     if (reason) {
       lastHideReason = reason;

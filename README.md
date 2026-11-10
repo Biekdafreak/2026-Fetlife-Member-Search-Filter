@@ -87,8 +87,8 @@ each member's activity page and reads the newest timestamp on it. In practice:
 - **Show members whose activity hasn't been checked yet**: with this off, unchecked members
   stay hidden until [check activity] reaches them. If the list looks almost empty, that's
   usually why. The status line will say so.
-- **Delay between requests** (100–5000 ms, default 1200) and **Profiles to check per click**
-  (0 = everyone on the page) let you trade speed against how busy you look to FetLife.
+- **Delay between requests** (100–5000 ms, default 1200) and **Profiles to check per run**
+  (0 = no limit) let you trade speed against how busy you look to FetLife.
 
 ## Privacy and network behavior
 
@@ -97,9 +97,13 @@ each member's activity page and reads the newest timestamp on it. In practice:
 - **The script only talks to fetlife.com**, using your existing session. It loads pages when
   you click [load N more pages], and checks activity automatically when the inactivity window
   is enabled. No activity requests are made while that filter is off or after you pause checks.
-- **Activity requests never run in parallel.** They go one at a time with a randomized gap, and
-  page loading is capped at 10 pages per click. FetLife is behind Cloudflare, and bursts of
-  requests look like scraping.
+- **Activity requests never run in parallel with each other.** They go one at a time with a
+  randomized gap. They do run alongside [load N more pages], so while both are going there are
+  two paced streams instead of one. Page loading is capped at 100 pages per click. FetLife is
+  behind Cloudflare, and bursts of requests look like scraping.
+- **A refusal pauses the checks.** If FetLife answers an activity lookup with 403 or 429, or
+  three lookups fail in a row, checking stops until you click [check activity]. Failed lookups
+  are never recorded as "no activity".
 
 ## Limitations
 
@@ -147,6 +151,10 @@ pictures):
 - **2.17**: Load up to 100 pages per click (was 10), with a [stop] button for long runs.
 - **2.18**: Page loading stops at the end of FetLife's 10,000-member cap instead of refetching
   the last page over and over.
+- **2.19**: Activity is checked while [load N more pages] is still loading, so members are
+  judged as they arrive. Each answer updates only that member's card instead of re-filtering
+  the whole list, a rate-limit answer pauses the checks instead of marking people inactive, and
+  [Temporarily show all] is no longer undone by the next lookup.
 
 ## Credits and license
 
