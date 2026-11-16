@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         2026 Fetlife Member Filter
 // @namespace    http://tampermonkey.net/
-// @version      2.20
-// @description  Filter FetLife member lists by gender, age, role, location, picture count and recent activity. Hides fake one-photo profiles, loads up to 10 pages at once, and filters cards before they render.
+// @version      2.21
+// @description  Filter FetLife member lists by gender, age, role, location and recent activity. Loads up to 100 pages at once and filters cards before they render.
 // @author       Bull864
 // @author       genevera
 // @author       Biekdafreak
@@ -327,20 +327,41 @@
     hiddenWhy = {};
   }
 
-  function processCard(card) {
-    if (card.dataset.filiProcessed === "true") return;
-    card.dataset.filiProcessed = "true";
-    addBlockButton(card);
+  // Judge a batch of cards first, then change them. shouldHide reads
+  // innerText, which makes the browser lay the page out again if anything
+  // changed since the last read, and judging a card changes it (its ✕ button,
+  // the hidden class). Done one card at a time, that was a full re-layout of
+  // the list per card: 9,180 merged cards took about a minute to filter, and
+  // Save & apply about 25 seconds. Reading every card in the batch before
+  // writing to any of them costs one layout per batch instead.
+  function processCards(cards) {
+    const verdicts = [];
+    for (const card of cards) {
+      if (card.dataset.filiProcessed === "true") continue;
+      card.dataset.filiProcessed = "true";
+      lastHideReason = "filters";
+      let hide = false;
+      try {
+        hide = shouldHide(card);
+      } catch (e) {
+        // One odd card must not leave the rest of the batch unjudged.
+        console.debug("[FiLi] could not judge a card", e);
+      }
+      verdicts.push([card, hide, lastHideReason]);
+    }
+    if (!verdicts.length) return;
 
-    lastHideReason = "filters";
-    if (shouldHide(card)) {
-      hideUnit(card).classList.add("fili-hidden");
-      hiddenCount++;
-      hiddenWhy[lastHideReason] = (hiddenWhy[lastHideReason] || 0) + 1;
-      // Remembered so one card can be re-judged later without recounting all.
-      card.dataset.filiWhy = lastHideReason;
-    } else {
-      delete card.dataset.filiWhy;
+    for (const [card, hide, why] of verdicts) {
+      addBlockButton(card);
+      if (hide) {
+        hideUnit(card).classList.add("fili-hidden");
+        hiddenCount++;
+        hiddenWhy[why] = (hiddenWhy[why] || 0) + 1;
+        // Remembered so one card can be re-judged later without recounting all.
+        card.dataset.filiWhy = why;
+      } else {
+        delete card.dataset.filiWhy;
+      }
     }
 
     updateStatus();
@@ -349,13 +370,45 @@
     scheduleActivityQueue();
   }
 
-  function processAllCards() {
-    document.querySelectorAll(CARD_SELECTOR).forEach(processCard);
+  function processCard(card) {
+    processCards([card]);
   }
 
+  function processAllCards() {
+    processCards(document.querySelectorAll(CARD_SELECTOR));
+  }
+
+  // The header count is rebuilt from the page itself, not trusted from the
+  // running tallies. On a single-page app those drifted: cards judged before
+  // the panel existed never reached the header (it stayed blank), and cards
+  // from the previous route stayed counted after FetLife removed them.
+  // Coalesced to one recount per task, so a batch of 20 cards or a stream of
+  // activity answers costs one pass over the list, not one per card.
+  let statusQueued = false;
+
   function updateStatus() {
+    if (statusQueued) return;
+    statusQueued = true;
+    setTimeout(() => {
+      statusQueued = false;
+      renderStatus();
+    }, 0);
+  }
+
+  function recountHidden() {
+    resetHiddenCounts();
+    document.querySelectorAll(CARD_SELECTOR).forEach((card) => {
+      if (!hideUnit(card).classList.contains("fili-hidden")) return;
+      const why = card.dataset.filiWhy || "filters";
+      hiddenCount++;
+      hiddenWhy[why] = (hiddenWhy[why] || 0) + 1;
+    });
+  }
+
+  function renderStatus() {
     const el = document.getElementById("FiLiNumHidden");
     if (!el) return;
+    recountHidden();
     if (!hiddenCount) {
       el.textContent = "";
       return;
@@ -369,22 +422,36 @@
   // ─── MutationObserver: fires the instant cards exist in the DOM ────────────
 
   const observer = new MutationObserver((mutations) => {
+    const found = [];
     for (const mutation of mutations) {
+      // A route change removes the old list: drop its cards from the count.
+      for (const node of mutation.removedNodes) {
+        if (
+          node.nodeType === 1 &&
+          (node.matches(CARD_SELECTOR) || node.querySelector(CARD_SELECTOR))
+        ) {
+          updateStatus();
+          break;
+        }
+      }
+
       for (const node of mutation.addedNodes) {
         if (node.nodeType !== 1) continue;
 
         // Node itself might be a card
         if (node.matches && node.matches(CARD_SELECTOR)) {
-          processCard(node);
+          found.push(node);
           continue;
         }
 
         // Or it might contain cards (e.g. a wrapper div added during infinite scroll)
         if (node.querySelectorAll) {
-          node.querySelectorAll(CARD_SELECTOR).forEach(processCard);
+          node.querySelectorAll(CARD_SELECTOR).forEach((c) => found.push(c));
         }
       }
     }
+    // Judged together, so a page of new cards costs one layout, not one each.
+    processCards(found);
     scheduleActivityQueue();
   });
 
@@ -543,6 +610,9 @@
 
     // Do an immediate pass in case cards already exist in the DOM
     processAllCards();
+    // Cards the observer judged before this panel existed skip that pass, so
+    // their count has to be shown here or the header stays blank.
+    updateStatus();
   }
 
   function bindUIEvents() {
@@ -989,11 +1059,14 @@
         // happen while attached and visible: on a detached or hidden node
         // innerText falls back to raw textContent, whose line breaks can break
         // the "35F sub" parse and hide the card as ageless (v2.13 did that).
+        // Unhide the whole batch, then judge it in one pass (see processCards).
+        const merged = [];
         pending.forEach((u) => {
           const card = u.matches(CARD_SELECTOR) ? u : u.querySelector(CARD_SELECTOR);
           u.classList.remove("fili-hidden");
-          if (card) processCard(card);
+          if (card) merged.push(card);
         });
+        processCards(merged);
         loadedThroughPage = page;
 
         if (atEnd) {
@@ -1772,6 +1845,7 @@
     unit.style.outline = "";
     hiddenCount++;
     hiddenWhy.blocked = (hiddenWhy.blocked || 0) + 1;
+    card.dataset.filiWhy = "blocked";
     updateStatus();
   }
 

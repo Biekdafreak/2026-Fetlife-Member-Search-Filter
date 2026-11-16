@@ -2,19 +2,18 @@
 
 A Tampermonkey userscript for FetLife member lists (group members, place members, search
 results). It hides the profiles you don't want before they appear on screen. You can filter
-by gender, age, role, location, picture count and how recently someone was active.
+by gender, age, role, location and how recently someone was active.
 
-The original goal was clearing out fake profiles with a single photo. It now also loads
-several pages at once and filters across all of them, so you can work through thousands of
-members in minutes instead of paging through them by hand.
+It also loads several pages at once and filters across all of them, so you can work through
+thousands of members in minutes instead of paging through them by hand.
 
 **[Install the script](https://raw.githubusercontent.com/Biekdafreak/2026-Fetlife-Member-Search-Filter/main/fetlife-member-filter.user.js)**
 (you need Tampermonkey first; see below)
 
 ![The FilterLife panel with Options open, above a member list](screenshots/filter-panel.png)
 
-*The full panel with Options open, shown on a demo list of made-up members. Minimum pictures
-is set to 2, so the two single-photo profiles are hidden, and the status line says so.*
+*The panel with Options open, shown on a demo list of made-up members. The status line says
+how many members are hidden and why.*
 
 ---
 
@@ -26,7 +25,6 @@ is set to 2, so the two single-photo profiles are hidden, and the status line sa
 | **Genders** | Checkbox for every gender FetLife lists, with [all] / [none] / [invert] shortcuts, plus a toggle for profiles with no gender set. |
 | **Roles** | Same as genders, for every role FetLife lists (dom, domme, brat, bottom and so on). |
 | **Location** | Text match against the member's location, e.g. `California`. Leave it empty to turn it off. |
-| **Pictures** | Hide profiles with no pictures, or set a minimum count. **Set it to 2 to drop single-photo fakes.** |
 | **Videos / writings** | Only show profiles that have videos, or writings. |
 | **Organizations** | Show or hide organization profiles. |
 | **Last activity** | Hide members who haven't been active in the last N days, weeks, months or years. |
@@ -81,7 +79,7 @@ FetLife member cards don't show when someone was last active. To find out, the s
 each member's activity page and reads the newest timestamp on it. In practice:
 
 - **Set your other filters first.** Only members who pass them get checked, so a tight
-  gender, age or picture filter saves a lot of requests.
+  gender, age or location filter saves a lot of requests.
 - Results are **cached**. Each member is re-checked after a quarter of your window, clamped to
   between 1 and 30 days. With a 1-month window, that's about once a week.
 - **Show members whose activity hasn't been checked yet**: with this off, unchecked members
@@ -131,8 +129,7 @@ each member's activity page and reads the newest timestamp on it. In practice:
 
 ## What this fork adds
 
-Changes in this fork, building on the original filter (gender, age, role, location,
-pictures):
+Changes in this fork, building on the original filter:
 
 - **2.01**: The panel now appears after FetLife's in-site navigation, not only after a refresh.
 - **2.02**: Multi-page loading.
@@ -155,6 +152,12 @@ pictures):
   judged as they arrive. Each answer updates only that member's card instead of re-filtering
   the whole list, a rate-limit answer pauses the checks instead of marking people inactive, and
   [Temporarily show all] is no longer undone by the next lookup.
+- **2.20**: Requests are paced across all open tabs, so two tabs can't double the request rate,
+  and everything stops the moment FetLife shows its lockout page.
+- **2.21**: Much faster on long merged lists. Filtering 9,000 loaded members took about a
+  minute and now takes under a second, and Save & apply went from 25 seconds to a quarter of a
+  second. The status line no longer goes blank or keeps counting members from the previous page
+  after FetLife's in-site navigation.
 
 ## Credits and license
 
