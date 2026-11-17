@@ -44,6 +44,11 @@ Other tools:
   gender or age label doesn't match what's actually posted. Bring someone back with
   [Temporarily show all] and "unhide" on their card, or clear the whole list from Options.
 - **[Temporarily show all]** reveals everything without changing your settings.
+- **Backup** (in Options): **[save backup file]** downloads your settings, the members you
+  hid and the activity cache as one file. **[restore from file]** brings them back after a
+  reinstall or in another browser. Restoring replaces your settings, adds to your hidden list
+  (nobody gets un-hidden) and merges the activity cache, keeping the newest answer for each
+  member.
 - **No flicker.** Unwanted cards are hidden as they're inserted, including cards from merged
   pages, so they never show up even for a moment.
 - **Works with FetLife's in-site navigation.** The panel appears on every member list, not
@@ -92,6 +97,9 @@ each member's activity page and reads the newest timestamp on it. In practice:
 
 - **Everything runs in your browser.** Settings and the activity cache are stored locally in
   Tampermonkey. There's no server, account, analytics or tracking.
+- **A backup file lists FetLife profiles** (the ones you hid and the ones whose activity was
+  checked). It's saved wherever your browser saves downloads and goes nowhere else. Keep it
+  private.
 - **The script only talks to fetlife.com**, using your existing session. It loads pages when
   you click [load N more pages], and checks activity automatically when the inactivity window
   is enabled. No activity requests are made while that filter is off or after you pause checks.
@@ -158,6 +166,9 @@ Changes in this fork, building on the original filter:
   minute and now takes under a second, and Save & apply went from 25 seconds to a quarter of a
   second. The status line no longer goes blank or keeps counting members from the previous page
   after FetLife's in-site navigation.
+- **2.22**: Backup file: save your settings, hidden members and activity cache, and restore
+  them after a reinstall or in another browser. Restored files are checked value by value
+  before anything is stored.
 
 ## Credits and license
 

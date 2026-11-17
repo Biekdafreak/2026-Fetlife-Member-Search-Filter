@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         2026 Fetlife Member Filter
 // @namespace    http://tampermonkey.net/
-// @version      2.21
+// @version      2.22
 // @description  Filter FetLife member lists by gender, age, role, location and recent activity. Loads up to 100 pages at once and filters cards before they render.
 // @author       Bull864
 // @author       genevera
@@ -200,6 +200,15 @@
   // and log each new one once so the lists can be extended deliberately.
   const seenUnknownGenders = new Set();
   const seenUnknownRoles = new Set();
+
+  /** For values pasted into the panel's HTML (attribute or text). */
+  function escAttr(value) {
+    return String(value)
+      .replace(/&/g, "&amp;")
+      .replace(/"/g, "&quot;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  }
 
   function noteUnknown(seen, label, value) {
     if (seen.has(value)) return;
@@ -518,10 +527,10 @@
           <b>Age range</b><br />
           From
           <input type="number" class="fili-numeric" id="FiLiAgeMin"
-            min="${AGE_MIN_FLOOR}" max="${AGE_MAX_CEIL}" value="${settings.ageMin}" />
+            min="${AGE_MIN_FLOOR}" max="${AGE_MAX_CEIL}" value="${escAttr(settings.ageMin)}" />
           to
           <input type="number" class="fili-numeric" id="FiLiAgeMax"
-            min="${AGE_MIN_FLOOR}" max="${AGE_MAX_CEIL}" value="${settings.ageMax}" />
+            min="${AGE_MIN_FLOOR}" max="${AGE_MAX_CEIL}" value="${escAttr(settings.ageMax)}" />
           years old
         </div>
 
@@ -560,7 +569,7 @@
         <div class="fili-section">
           <b>Location filter</b><br />
           <input type="text" class="fili-text-input" id="FiLiLocationFilter"
-            value="${settings.locationFilter}"
+            value="${escAttr(settings.locationFilter)}"
             placeholder="e.g. California — leave empty to disable" />
           <div class="fili-small">Case-insensitive. Only profiles whose location contains this text will be shown.</div>
         </div>
@@ -576,7 +585,7 @@
           <div class="fili-inline-row" style="margin-top:6px;">
             <label for="FiLiMinPics">Minimum pictures:</label>
             <input type="number" class="fili-numeric" id="FiLiMinPics"
-              min="0" max="9999" value="${settings.minPics}" />
+              min="0" max="9999" value="${escAttr(settings.minPics)}" />
             <span class="fili-small">(0 = disabled)</span>
           </div>
           <div class="fili-small">Set to 2 to hide profiles with only 1 picture. Overrides the checkbox above when set higher.</div>
@@ -1895,6 +1904,200 @@
   buildUI = function buildUIWithBlocks() {
     buildUIWithoutBlocks();
     injectBlockUI();
+  };
+
+  // ─── Backup file ──────────────────────────────────────────────────────────
+  //
+  // Everything this script knows lives in Tampermonkey's storage for this one
+  // browser: a reinstall, a new browser or Tampermonkey vanishing takes the
+  // hidden list and every activity answer with it, and rebuilding the cache
+  // means thousands of requests. So it can be saved to a file and restored.
+  //
+  // Restoring replaces the settings, adds the file's hidden members to the
+  // current list (never un-hides anyone) and merges the activity cache, newest
+  // answer per member. Every value is checked before it is stored, since a
+  // backup is a file anyone could have edited.
+
+  const BACKUP_APP = "FilterLife backup";
+  // The request-pacing timestamp is left out on purpose: it is only
+  // meaningful for the next second or so.
+  const BACKUP_NUMBER_KEYS = [PAGES_KEY, SCALE_KEY, ACT_YEARS_KEY, ACT_PER_RUN_KEY, ACT_DELAY_KEY];
+  const PATH_RE = /^\/[^\s"'<>]{1,200}$/;
+
+  function setBackupStatus(msg) {
+    const el = document.getElementById("FiLiBackupStatus");
+    if (el) el.textContent = msg;
+  }
+
+  function parseJsonValue(value, fallback) {
+    if (typeof value !== "string") return fallback;
+    try {
+      return JSON.parse(value);
+    } catch (e) {
+      return fallback;
+    }
+  }
+
+  /** Keep only known settings, each with the type its default has. */
+  function sanitizeSettings(obj) {
+    const out = {};
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return out;
+    for (const [key, def] of Object.entries(DEFAULTS)) {
+      if (!Object.prototype.hasOwnProperty.call(obj, key)) continue;
+      const v = obj[key];
+      if (Array.isArray(def)) {
+        if (Array.isArray(v)) out[key] = v.filter((x) => typeof x === "string" && x.length < 100);
+      } else if (typeof def === "number") {
+        const n = Number(v);
+        if (Number.isFinite(n)) out[key] = n;
+      } else if (typeof v === typeof def) {
+        out[key] = typeof v === "string" ? v.slice(0, 200) : v;
+      }
+    }
+    return out;
+  }
+
+  function backupPaths(value) {
+    const list = parseJsonValue(value, []);
+    return Array.isArray(list) ? list.filter((p) => typeof p === "string" && PATH_RE.test(p)) : [];
+  }
+
+  function backupCache(value) {
+    const obj = parseJsonValue(value, {});
+    const out = {};
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return out;
+    for (const [path, entry] of Object.entries(obj)) {
+      if (!PATH_RE.test(path) || !entry || typeof entry !== "object") continue;
+      if (!Number.isFinite(entry.checked)) continue;
+      const clean = {};
+      for (const [k, v] of Object.entries(entry)) {
+        if (v === null || typeof v === "number" || typeof v === "boolean" ||
+            (typeof v === "string" && v.length < 100)) clean[k] = v;
+      }
+      out[path] = clean;
+    }
+    return out;
+  }
+
+  function exportBackup() {
+    saveActivityCache(); // include answers this tab hasn't written yet
+    const values = {};
+    for (const key of ["FiLiSettings", ...BACKUP_NUMBER_KEYS, ACT_UNIT_KEY, ACT_UNKNOWN_KEY, BLOCKED_KEY, ACT_CACHE_KEY]) {
+      const v = GM_getValue(key, undefined);
+      if (v !== undefined) values[key] = v;
+    }
+    const version =
+      typeof GM_info !== "undefined" && GM_info && GM_info.script ? GM_info.script.version : "";
+    const data = { app: BACKUP_APP, version, exported: new Date().toISOString(), values };
+    const name = `filterlife-backup-${data.exported.slice(0, 10)}.json`;
+    try {
+      const blob = new Blob([JSON.stringify(data, null, 1)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      const hidden = backupPaths(values[BLOCKED_KEY]).length;
+      const answers = Object.keys(backupCache(values[ACT_CACHE_KEY])).length;
+      setBackupStatus(`saved ${name}: ${hidden} hidden members, ${answers} activity answers`);
+    } catch (e) {
+      setBackupStatus("couldn't save the file: " + e.message);
+    }
+  }
+
+  async function importBackup(file) {
+    let data;
+    try {
+      data = JSON.parse(await file.text());
+    } catch (e) {
+      data = null;
+    }
+    if (!data || data.app !== BACKUP_APP || !data.values || typeof data.values !== "object") {
+      setBackupStatus("that file isn't a FilterLife backup; nothing changed");
+      return;
+    }
+    const v = data.values;
+    const paths = backupPaths(v[BLOCKED_KEY]);
+    const cache = backupCache(v[ACT_CACHE_KEY]);
+    const added = paths.filter((p) => !blockedMembers.has(p)).length;
+    const when = typeof data.exported === "string" ? data.exported.slice(0, 10) : "an unknown date";
+    const ok = confirm(
+      `Restore the FilterLife backup from ${when}?\n\n` +
+      `• Your settings are replaced with the backup's.\n` +
+      `• ${paths.length} hidden members are added to your list (${added} new). Nobody is un-hidden.\n` +
+      `• ${Object.keys(cache).length} activity answers are merged in, newest kept.\n\n` +
+      "The page reloads afterwards."
+    );
+    if (!ok) {
+      setBackupStatus("restore cancelled; nothing changed");
+      return;
+    }
+
+    if (v.FiLiSettings !== undefined) GM_setValue("FiLiSettings", sanitizeSettings(v.FiLiSettings));
+    for (const key of BACKUP_NUMBER_KEYS) {
+      const n = Number(v[key]);
+      if (v[key] !== undefined && Number.isFinite(n)) GM_setValue(key, n);
+    }
+    if (Object.prototype.hasOwnProperty.call(UNIT_MS, v[ACT_UNIT_KEY])) {
+      GM_setValue(ACT_UNIT_KEY, v[ACT_UNIT_KEY]);
+    }
+    if (typeof v[ACT_UNKNOWN_KEY] === "boolean") GM_setValue(ACT_UNKNOWN_KEY, v[ACT_UNKNOWN_KEY]);
+
+    for (const p of paths) blockedMembers.add(p);
+    saveBlocked();
+
+    const stored = readActivityCache();
+    for (const [path, entry] of Object.entries(cache)) {
+      if (!stored[path] || entry.checked > (stored[path].checked || 0)) stored[path] = entry;
+    }
+    GM_setValue(ACT_CACHE_KEY, JSON.stringify(stored));
+    activityCache = stored;
+
+    setBackupStatus("restored; reloading…");
+    location.reload();
+  }
+
+  /** Adds the Backup row above Save & apply. */
+  function injectBackupUI() {
+    if (document.getElementById("FiLiBackupStatus")) return;
+    const save = document.getElementById("FiLiSaveButton");
+    if (!save || !save.parentElement) return;
+
+    const sec = document.createElement("div");
+    sec.className = "fili-section";
+    sec.innerHTML = `
+      <b>Backup</b>
+      <span class="fili-action" id="FiLiExport">[save backup file]</span>
+      <span class="fili-action" id="FiLiImport">[restore from file]</span>
+      <span class="fili-status" id="FiLiBackupStatus"></span>
+      <input type="file" id="FiLiImportFile" accept=".json,application/json" style="display:none">
+      <div class="fili-small">
+        Saves your settings, the members you hid and the activity cache to a file, so a
+        reinstall or another browser doesn't start from zero. Restoring replaces your
+        settings, adds to your hidden list and merges the activity cache. The file lists
+        FetLife profiles, so keep it private.
+      </div>
+    `;
+    save.parentElement.insertAdjacentElement("beforebegin", sec);
+
+    const input = sec.querySelector("#FiLiImportFile");
+    sec.querySelector("#FiLiExport").onclick = exportBackup;
+    sec.querySelector("#FiLiImport").onclick = () => input.click();
+    input.onchange = () => {
+      const file = input.files && input.files[0];
+      input.value = ""; // so picking the same file again still fires
+      if (file) importBackup(file);
+    };
+  }
+
+  const buildUIWithoutBackup = buildUI;
+  buildUI = function buildUIWithBackup() {
+    buildUIWithoutBackup();
+    injectBackupUI();
   };
 
   // ─── Boot ─────────────────────────────────────────────────────────────────
